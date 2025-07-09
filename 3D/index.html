@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <title>PlayCanvas + Cannon.js via CDN + 20 Boxen over platform</title>
+
+  <!-- De scripts die ik nodig heb + mijn externe helper :) -->
+  <script src="https://code.playcanvas.com/playcanvas-stable.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+  <script src="https://hrn-host.vercel.app/playcanvas-helper.js"></script>
+
+  <style>
+    html, body {
+      margin: 0; height: 100%; overflow: hidden; background: #222;
+    }
+    canvas {
+      display: block; width: 100%; height: 100%;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="app-canvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById('app-canvas');
+    const helper = new PlayCanvasHelper(canvas);
+
+    // Groot platform van 20x20
+    helper.createPlane({
+      position: [0, -1, 0],
+      size: [20, 20],
+      color: [0.3, 0.3, 0.3],
+    });
+
+    // 5 kolommen en 4 rijen = 20 boxen in totaal
+    const columns = 5;
+    const rows = 4;
+    const spacingX = 10 / (columns - 1);
+    const spacingZ = 10 / (rows - 1);
+
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < columns; col++) {
+        helper.createBox({
+          position: [
+            col * spacingX - 10, // x van -10 tot +10
+            3,
+            row * spacingZ - 10  // z van -10 tot +10
+          ],
+          size: [1, 1, 1],
+          color: [0, 0.5, 1],
+          mass: 1
+        });
+      }
+    }
+  </script>
+</body>
+</html>
