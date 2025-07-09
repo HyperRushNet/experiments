@@ -1,0 +1,793 @@
+
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Advanced Platform Fighter</title>
+<style>
+body {
+    margin: 0;
+    padding: 0;
+    background: linear-gradient(135deg, #1a1a2e, #16213e, #0f3460);
+    font-family: 'Arial', sans-serif;
+    overflow: hidden;
+}
+#gameCanvas {
+    display: block;
+    margin: 0 auto;
+    background: linear-gradient(to bottom, #87CEEB 0%, #98D8E8 50%, #87CEEB 100%);
+    border: 3px solid #333;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+}
+#ui {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: white;
+    font-size: 14px;
+    z-index: 100;
+    background: rgba(0,0,0,0.8);
+    padding: 15px;
+    border-radius: 10px;
+    border: 2px solid #444;
+}
+#controls {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    color: white;
+    font-size: 11px;
+    z-index: 100;
+    background: rgba(0,0,0,0.8);
+    padding: 12px;
+    border-radius: 8px;
+    border: 2px solid #444;
+    max-width: 400px;
+}
+.player-info {
+    display: inline-block;
+    margin-right: 40px;
+    vertical-align: top;
+}
+.health-bar {
+    width: 180px;
+    height: 25px;
+    background: #333;
+    border: 2px solid #fff;
+    margin-top: 5px;
+    position: relative;
+    border-radius: 3px;
+    overflow: hidden;
+}
+.health-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #ff0000, #ffff00, #00ff00);
+    transition: width 0.3s;
+}
+.combo-counter {
+    font-weight: bold;
+    margin-top: 5px;
+    color: #ffff00;
+}
+.special-meter {
+    width: 180px;
+    height: 15px;
+    background: #222;
+    border: 1px solid #888;
+    margin-top: 3px;
+    border-radius: 2px;
+    overflow: hidden;
+}
+.special-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #ff00ff, #00ffff);
+    transition: width 0.2s;
+}
+</style>
+</head>
+<body>
+<div id="ui">
+    <div class="player-info">
+        <div>🥊 Speler 1 (Blauw)</div>
+        <div class="health-bar">
+            <div class="health-fill" id="health1" style="width: 100%"></div>
+        </div>
+        <div class="special-meter">
+            <div class="special-fill" id="special1" style="width: 0%"></div>
+        </div>
+        <div class="combo-counter" id="combo1">Combo: 0</div>
+        <div id="state1" style="font-size: 11px; color: #aaa;"></div>
+    </div>
+    <div class="player-info">
+        <div>🥊 Speler 2 (Rood)</div>
+        <div class="health-bar">
+            <div class="health-fill" id="health2" style="width: 100%"></div>
+        </div>
+        <div class="special-meter">
+            <div class="special-fill" id="special2" style="width: 0%"></div>
+        </div>
+        <div class="combo-counter" id="combo2">Combo: 0</div>
+        <div id="state2" style="font-size: 11px; color: #aaa;"></div>
+    </div>
+</div>
+<canvas id="gameCanvas" width="1000" height="600"></canvas>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d', { alpha: false });
+
+// Optimize canvas rendering quality
+ctx.imageSmoothingEnabled = true;
+ctx.imageSmoothingQuality = 'high';
+
+// Load high-resolution background image once
+const backgroundImage = new Image();
+backgroundImage.src = 'https://mir-s3-cdn-cf.behance.net/project_modules/1400/c221c957092339.59c8dfa58d6d7.jpg';
+
+// Particle system
+const particles = [];
+
+class Particle {
+    constructor(x, y, vx, vy, color, life) {
+        this.x = x;
+        this.y = y;
+        this.vx = vx;
+        this.vy = vy;
+        this.color = color;
+        this.life = life;
+        this.maxLife = life;
+    }
+    update() {
+        this.x += this.vx;
+        this.y += this.vy;
+        this.vy += 0.2;
+        this.life--;
+    }
+    draw() {
+        if (this.life <= 0) return;
+        ctx.save();
+        ctx.globalAlpha = this.life / this.maxLife;
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x - 2, this.y - 2, 4, 4);
+        ctx.restore();
+    }
+}
+
+// Game state
+const game = {
+    gravity: 0.8,
+    friction: 0.85,
+    airFriction: 0.85,
+    platforms: [
+        { x: 0, y: 550, width: 1000, height: 50 },
+        { x: 200, y: 450, width: 200, height: 20 },
+        { x: 600, y: 400, width: 200, height: 20 },
+        { x: 100, y: 350, width: 150, height: 20 },
+        { x: 750, y: 300, width: 150, height: 20 },
+        { x: 400, y: 250, width: 200, height: 20 },
+        { x: 50, y: 200, width: 100, height: 20 },
+        { x: 850, y: 200, width: 100, height: 20 },
+    ]
+};
+
+// Keys
+const keys = {};
+const keysPressed = {};
+
+// Player class
+class Player {
+    constructor(x, y, color, controls) {
+        this.x = x;
+        this.y = y;
+        this.width = 30;
+        this.height = 40;
+        this.color = color;
+        this.controls = controls;
+        this.vx = 0;
+        this.vy = 0;
+        this.onGround = false;
+        this.onWall = 0; // -1 left wall, 1 right wall, 0 none
+        this.wallJumpTimer = 0;
+        this.health = 100;
+        this.combo = 0;
+        this.comboTimer = 0;
+        this.specialMeter = 0;
+        this.state = 'idle'; // idle, attacking, stunned, ko
+        this.attackType = '';
+        this.attackTimer = 0;
+        this.hitStun = 0;
+        this.grabTimer = 0;
+        this.invulnerable = 0;
+        this.facing = 1; // 1 rechts, -1 links
+        this.canAirAttack = true;
+        this.airAttacks = 0;
+        this.maxAirAttacks= 2;
+        this.animFrame=0;
+        this.animTimer=0;
+        this.coyoteTimer=0;
+        this.maxCoyoteTime=6; 
+        this.wasOnPlayer=false;
+    }
+
+    update() {
+        this.animTimer++;
+        if (this.animTimer%8===0) this.animFrame++;
+        if (this.comboTimer>0) {
+            this.comboTimer--;
+            if (this.comboTimer<=0) this.combo=0;
+        }
+        if (this.attackTimer>0) this.attackTimer--;
+        if (this.hitStun>0) this.hitStun--;
+        if (this.grabTimer>0) this.grabTimer--;
+        if (this.invulnerable>0) this.invulnerable--;
+        if (this.wallJumpTimer>0) this.wallJumpTimer--;
+        if (this.coyoteTimer>0) this.coyoteTimer--;
+
+        if (this.onGround) {
+            this.airAttacks=0;
+            this.canAirAttack=true;
+            this.coyoteTimer=this.maxCoyoteTime;
+        }
+        if (this.attackTimer<=0 && this.hitStun<=0 && this.grabTimer<=0) {
+            this.state='idle';
+        }
+        if (this.hitStun>0 || this.state==='grabbed') {
+            this.applyPhysics();
+            this.checkCollisions();
+            const ground= game.platforms[0];
+            if (this.y+this.height>ground.y && this.vy>=0) {
+                this.y=ground.y-this.height;
+                this.vy=0;
+                this.onGround=true;
+            }
+            return;
+        }
+        this.handleInput();
+        this.applyPhysics();
+        this.checkCollisions();
+        const ground= game.platforms[0];
+        if (this.y+this.height>ground.y && this.vy>=0) {
+            this.y=ground.y-this.height;
+            this.vy=0;
+            this.onGround=true;
+        }
+        if (!this.onGround || !this.wasOnPlayer) {
+            this.wasOnPlayer=false;
+        }
+    }
+
+    handleInput() {
+        const pressed= (key)=> keysPressed[this.controls[key]] || false;
+        const held= (key)=> keys[this.controls[key]] || false;
+        if (held('left') && this.state!=='grabbed') {
+            this.vx-= this.onGround?1.2:0.8;
+            this.facing=-1;
+        }
+        if (held('right') && this.state!=='grabbed') {
+            this.vx+= this.onGround?1.2:0.8;
+            this.facing=1;
+        }
+        // **Aangepaste sprongkracht**
+        if (pressed('jump')) {
+            if ((this.onGround || this.coyoteTimer>0) && this.state!=='grabbed' && this.state!=='attacking') {
+                this.vy= -16; // hogere sprong
+                this.onGround=false;
+                this.coyoteTimer=0;
+            } else if (this.onWall!==0 && this.wallJumpTimer<=0) {
+                this.vy= -14;
+                this.vx= -this.onWall * 10;
+                this.wallJumpTimer=20;
+                this.onWall=0;
+            }
+        }
+        // aanvallen weg, blokkeren weg, grab weg
+        if (this.canAirAttack || this.onGround) {
+            if (pressed('sword') && this.attackTimer<=0) {
+                this.performAttack('sword');
+            }
+            if (pressed('kick') && this.attackTimer<=0) {
+                this.performAttack('kick');
+            }
+            if (pressed('grab') && this.attackTimer<=0) {
+                this.performAttack('grab');
+            }
+            if (pressed('special') && this.specialMeter>=50 && this.attackTimer<=0) {
+                this.performSpecial();
+            }
+        }
+    }
+
+    performAttack(type) {
+        this.state= 'attacking';
+        this.attackType= type;
+        const isAerial= !this.onGround;
+        switch(type) {
+            case 'sword':
+                this.attackTimer= isAerial?25:30;
+                break;
+            case 'kick':
+                this.attackTimer= isAerial?20:25;
+                if (isAerial) this.vy= Math.max(this.vy,-5);
+                break;
+            case 'grab':
+                this.attackTimer=35;
+                this.state='grabbing';
+                break;
+        }
+        if (isAerial) {
+            this.airAttacks++;
+            if (this.airAttacks>= this.maxAirAttacks) this.canAirAttack=false;
+        }
+        this.checkAttackHit(type,isAerial);
+    }
+
+    performSpecial() {
+        this.specialMeter= Math.max(0, this.specialMeter-50);
+        this.state='attacking';
+        this.attackType='special';
+        this.attackTimer=40;
+        this.invulnerable=20;
+        screenShake=8;
+        this.checkAttackHit('special', false);
+    }
+
+    checkAttackHit(attackType, isAerial) {
+        const other= this===player1?player2:player1;
+        let attackRange, damage, knockbackX, knockbackY;
+        switch(attackType) {
+            case 'sword':
+                attackRange= isAerial?50:60;
+                damage= isAerial?12:15;
+                knockbackX= isAerial?8:6;
+                knockbackY= isAerial?-2:-4;
+                break;
+            case 'kick':
+                attackRange= isAerial?45:55;
+                damage= isAerial?18:12;
+                knockbackX= isAerial?12:8;
+                knockbackY= isAerial?-6:-2;
+                break;
+            case 'grab':
+                attackRange=40;
+                damage=20;
+                knockbackX=10;
+                knockbackY=-8;
+                break;
+            case 'special':
+                attackRange=80;
+                damage=35;
+                knockbackX=15;
+                knockbackY=-10;
+                break;
+        }
+        const dx= other.x+ other.width/2 - (this.x+ this.width/2);
+        const dy= other.y+ other.height/2 - (this.y+ this.height/2);
+        const dist= Math.sqrt(dx*dx+dy*dy);
+        if (dist< attackRange && Math.sign(dx)== this.facing) {
+            if (other.state==='blocking' && Math.sign(dx)!== other.facing) {
+                other.blockStun=20;
+                this.vx= -this.facing*3;
+                this.specialMeter= Math.min(100, this.specialMeter+5);
+                for (let i=0;i<8;i++) {
+                    particles.push(new Particle(other.x+other.width/2, other.y+other.height/2,
+                        (Math.random()-0.5)*8, (Math.random()-0.5)*8,'#FFFF00',20));
+                }
+                return;
+            }
+            if (other.invulnerable<=0 && other.grabTimer<=0) {
+                const comboMult=1+ this.combo*0.3;
+                const finalDamage= Math.floor(damage* comboMult);
+                const finalKbX= knockbackX* comboMult;
+                const finalKbY= knockbackY* (0.5+ comboMult*0.5);
+                other.takeDamage(finalDamage);
+                other.takeKnockback(this.facing* finalKbX, finalKbY);
+                this.combo++;
+                this.comboTimer=180;
+                this.specialMeter= Math.min(100,this.specialMeter+8);
+                if (attackType==='grab') {
+                    other.state='grabbed';
+                    other.grabTimer=30;
+                    other.x= this.x+ this.facing*35;
+                    other.y= this.y;
+                    const ground= game.platforms[0];
+                    if (other.y+ other.height> ground.y) {
+                        other.y= ground.y- other.height;
+                        other.vy=0;
+                        other.onGround=true;
+                        console.log(`${this===player1?'Player 1':'Player 2'} adjust grabbed`);
+                    }
+                    other.invulnerable=40;
+                }
+                const pColor= attackType==='special'? '#FF00FF':attackType==='kick'?'#FF6600':'#FF0000';
+                for (let i=0;i<(attackType==='special'?15:10);i++) {
+                    particles.push(new Particle(other.x+other.width/2, other.y+other.height/2,
+                        (Math.random()-0.5)*12, (Math.random()-0.5)*12, pColor,30));
+                }
+            }
+        }
+    }
+    takeDamage(amount) {
+        this.health= Math.max(0, Math.min(100, this.health- amount));
+        this.hitStun=25;
+        this.invulnerable=30;
+        this.state='stunned';
+        if (this.health<=0) this.state='ko';
+    }
+    takeKnockback(vx,vy) {
+        this.vx+= Math.max(-12, Math.min(12, vx));
+        this.vy+= Math.max(-10, Math.min(10, vy));
+        this.onGround=false;
+        this.coyoteTimer=0;
+    }
+
+    applyPhysics() {
+        if (this.state!=='grabbed') {
+            this.vy+= game.gravity;
+        }
+        if (this.onGround) {
+            this.vx*= game.friction;
+        } else {
+            this.vx*= game.airFriction;
+        }
+        const maxSpeed= this.state==='blocking'?6:12;
+        this.vx= Math.max(-maxSpeed, Math.min(maxSpeed, this.vx));
+        const maxVy=500;
+        this.vy= Math.max(-maxVy, Math.min(maxVy, this.vy));
+        this.x+= this.vx;
+        this.y+= this.vy;
+    }
+
+    checkCollisions() {
+        let wasOnGround= this.onGround;
+        this.onGround= false;
+        this.onWall=0;
+        const other= this===player1?player2:player1;
+        // Eigen object collision
+        if (this!==other) { // niet jezelf checken
+            if (this.x< other.x+ other.width && this.x+ this.width> other.x && this.y< other.y+ other.height && this.y+ this.height> other.y) {
+                // botsing, resolve
+                const prevX= this.x - this.vx;
+                const prevY= this.y - this.vy;
+                const prevOtherX= other.x - other.vx;
+                const prevOtherY= other.y - other.vy;
+                // Overlap corrigeren
+                const overlapXRight= (this.x+ this.width)- other.x;
+                const overlapXLeft= (other.x+ other.width)- this.x;
+                const overlapYBottom= (this.y+ this.height)- other.y;
+                const overlapYTop= (other.y+ other.height)- this.y;
+                const overlaps= [
+                    { axis:'x', value:overlapXRight, dir:1},
+                    { axis:'x', value:overlapXLeft, dir:-1},
+                    { axis:'y', value:overlapYBottom, dir:1},
+                    { axis:'y', value:overlapYTop, dir:-1}
+                ].filter(o=>o.value>0);
+                if (overlaps.length===0) return;
+
+                const minO= overlaps.reduce((min,curr)=> curr.value<min.value?curr:min, overlaps[0]);
+
+                if (minO.axis==='x') {
+                    if (minO.dir===1 && prevX+this.width<=prevOtherX) {
+                        this.x= other.x - this.width - 0.01; this.vx= Math.min( this.vx,0);
+                        this.onWall= -1;
+                    } else if (minO.dir===-1 && prevX>= prevOtherX+ other.width) {
+                        this.x= other.x + other.width + 0.01; this.vx= Math.max(this.vx,0);
+                        this.onWall= 1;
+                    }
+                } else {
+                    if (minO.dir===1 && prevY+ this.height<= prevOtherY+1) {
+                        this.y= other.y - this.height - 0.01; this.vy=0;
+                        this.onGround=true;
+                        this.wasOnPlayer=true;
+                        this.coyoteTimer= this.maxCoyoteTime;
+                    } else if (minO.dir===-1 && prevY>= prevOtherY+ other.height) {
+                        this.y= other.y + other.height + 0.01; this.vy= Math.max( this.vy,0);
+                    }
+                }
+
+                // Nogmaals check voor correct positie
+                if (this.x< other.x+ other.width && this.x+ this.width> other.x && this.y< other.y+ other.height && this.y+ this.height> other.y) {
+                    if (minO.axis==='x') {
+                        this.x= minO.dir===1? other.x - this.width - 0.01: other.x+ other.width+ 0.01;
+                    } else {
+                        this.y= minO.dir===1? other.y - this.height -0.01: other.y+ other.height+ 0.01;
+                        if (minO.dir===1) {
+                            this.onGround=true;
+                            this.wasOnPlayer=true;
+                            this.coyoteTimer= this.maxCoyoteTime;
+                        }
+                    }
+                }
+            } else if (wasOnGround && this.wasOnPlayer) {
+                this.vy= Math.min(this.vy,0);
+                this.coyoteTimer= this.maxCoyoteTime;
+            }
+        }
+        // platform
+        const sortedP= game.platforms.slice().sort((a,b)=> Math.abs(this.y+ this.height -a.y)- Math.abs(this.y+ this.height -b.y));
+        for (let p of sortedP) {
+            if (this.x< p.x+ p.width && this.x+ this.width> p.x && this.y< p.y+ p.height && this.y+ this.height> p.y) {
+                const prevY= this.y- this.vy; const prevX= this.x- this.vx;
+                if (this.vy>=0 && prevY+ this.height<= p.y+0.1) {
+                    this.y= p.y- this.height; this.vy=0; this.onGround=true; this.wasOnPlayer=false; break;
+                } else if (this.vy<0 && prevY>= p.y+ p.height) {
+                    this.y= p.y+ p.height+0.01; this.vy=0;
+                } else if (Math.abs(this.vx)>0.5) {
+                    if (this.vx>0 && prevX+ this.width<= p.x) {
+                        this.x= p.x- this.width- 0.01; this.vx=0;this.onWall=1;
+                    } else if (this.vx<0 && prevX>= p.x+ p.width) {
+                        this.x= p.x+ p.width+0.01; this.vx=0; this.onWall=-1;
+                    }
+                }
+            }
+        }
+        if (this.x<0) {this.x=0; this.vx=0; this.onWall=-1;}
+        if (this.x > canvas.width - this.width) {this.x=canvas.width - this.width; this.vx=0; this.onWall=1;}
+        if (this.y+ this.height> game.platforms[0].y && this.vy>=0) {
+            this.y= game.platforms[0].y- this.height; this.vy=0; this.onGround=true; this.wasOnPlayer=false;
+        }
+        if (this.y> canvas.height) {
+            this.takeDamage(25);
+            this.respawn();
+        }
+    }
+
+    respawn() {
+        this.x= this===player1?100:800;
+        this.y=400;
+        this.vx=0; this.vy=0;
+        this.health= Math.min(100,this.health+15);
+        this.combo=0;
+        this.state='idle';
+        this.attackTimer=0; this.hitStun=0; this.grabTimer=0;
+        this.invulnerable=30; this.airAttacks=0; this.canAirAttack=true; this.coyoteTimer=0; this.wasOnPlayer=false;
+    }
+    draw() {
+        ctx.save();
+        if (this.invulnerable>0 && this.state!=='ko') ctx.globalAlpha= 0.3+ 0.7*Math.sin(this.invulnerable*0.8);
+        let bodyColor= this.color;
+        if (this.state==='stunned') bodyColor='#FFFF44';
+        if (this.state==='ko') bodyColor='#666666';
+        ctx.fillStyle= bodyColor;
+        ctx.fillRect(this.x,this.y,this.width,this.height);
+        if (this.state!=='ko') {
+            ctx.fillStyle='white';
+            ctx.fillRect(this.x+5,this.y+5,8,8);
+            ctx.fillRect(this.x+this.width-13,this.y+5,8,8);
+            ctx.fillStyle='black';
+            if (this.state==='attacking' || this.state==='grabbing') {
+                ctx.fillRect(this.x+7,this.y+9,4,2);
+                ctx.fillRect(this.x+this.width-11,this.y+9,4,2);
+            }
+        }
+        this.drawAttack();
+        if (this.state==='blocking') {
+            ctx.strokeStyle='#0080FF'; ctx.lineWidth=3; ctx.strokeRect(this.x-5,this.y-5,this.width+10,this.height+10);
+        }
+        ctx.restore();
+    }
+
+    drawAttack() {
+        if (this.attackTimer<=0) return;
+        const centerX= this.x+ this.width/2;
+        const centerY= this.y+ this.height/2;
+        switch(this.attackType) {
+            case 'sword':
+                ctx.strokeStyle='#C0C0C0'; ctx.lineWidth=5;
+                const swordLength=45;
+                const swingProgress=1- (this.attackTimer/30);
+                const swingAngle= swingProgress* Math.PI*0.9 - Math.PI*0.45;
+                const angle= (this.facing>0?0:Math.PI)+ swingAngle;
+                const endX= centerX+ Math.cos(angle)*swordLength;
+                const endY= centerY+ Math.sin(angle)*swordLength;
+                ctx.beginPath(); ctx.moveTo(centerX,centerY); ctx.lineTo(endX,endY); ctx.stroke();
+                ctx.strokeStyle='rgba(192,192,192,0.3)'; ctx.lineWidth=8; ctx.stroke();
+                break;
+            case 'kick':
+                ctx.fillStyle='#FF6600';
+                const kickX= centerX+ this.facing*25;
+                const kickY= centerY+5;
+                ctx.fillRect(kickX-8,kickY-8,16,16);
+                ctx.strokeStyle='#FFAA00'; ctx.lineWidth=3; ctx.strokeRect(kickX-12,kickY-12,24,24);
+                break;
+            case 'grab':
+                ctx.strokeStyle='#FF4444'; ctx.lineWidth=4;
+                const grabReach=30;
+                ctx.beginPath(); ctx.moveTo(centerX,centerY); ctx.lineTo(centerX+ this.facing*grabReach, centerY); ctx.stroke();
+                ctx.fillStyle='#FF8888'; ctx.fillRect(centerX+ this.facing*grabReach-4, centerY-6,8,12);
+                break;
+            case 'special':
+                ctx.fillStyle='#FF00FF'; ctx.beginPath(); ctx.arc(centerX,centerY,40,0,Math.PI*2); ctx.fill();
+                ctx.strokeStyle='#FFFF00'; ctx.lineWidth=3; ctx.stroke();
+                for (let i=0;i<6;i++) {
+                    const angle= (i/6)* Math.PI*2;
+                    const x1= centerX+ Math.cos(angle)*20;
+                    const y1= centerY+ Math.sin(angle)*20;
+                    const x2= centerX+ Math.cos(angle)*60;
+                    const y2= centerY+ Math.sin(angle)*60;
+                    ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+                }
+                break;
+        }
+    }
+}
+
+// Initialize players
+const player1= new Player(100,400,'#4169E1', {
+    left:'KeyA', right:'KeyD', jump:'KeyW', sword:'KeyS', kick:'KeyQ', grab:'KeyE', special:'KeyR'
+});
+const player2= new Player(800,400,'#DC143C', {
+    left:'ArrowLeft', right:'ArrowRight', jump:'ArrowUp', sword:'ArrowDown', kick:'Comma', grab:'Period', special:'Slash'
+});
+
+// keyboard handlers
+const keyDownHandler= (e)=> {
+    if (!keys[e.code]) {
+        keysPressed[e.code]=true;
+    }
+    keys[e.code]=true;
+}
+const keyUpHandler= (e)=> {
+    keys[e.code]=false;
+    keysPressed[e.code]=false;
+}
+document.addEventListener('keydown', keyDownHandler);
+document.addEventListener('keyup', keyUpHandler);
+
+function cleanup() {
+    document.removeEventListener('keydown', keyDownHandler);
+    document.removeEventListener('keyup', keyUpHandler);
+}
+
+function clearPressedKeys() {
+    for (let key in keysPressed) {
+        keysPressed[key]=false;
+    }
+}
+
+// UI update
+function updateUI() {
+    document.getElementById('health1').style.width= Math.max(0, player1.health)+'%';
+    document.getElementById('health2').style.width= Math.max(0, player2.health)+'%';
+    document.getElementById('special1').style.width= Math.max(0, player1.specialMeter)+'%';
+    document.getElementById('special2').style.width= Math.max(0, player2.specialMeter)+'%';
+    document.getElementById('combo1').textContent= 'Combo: '+player1.combo;
+    document.getElementById('combo2').textContent= 'Combo: '+player2.combo;
+    document.getElementById('state1').textContent= player1.state.toUpperCase();
+    document.getElementById('state2').textContent= player2.state.toUpperCase();
+}
+
+function drawPlatforms() {
+    game.platforms.forEach(p => {
+        ctx.fillStyle='rgba(0,0,0,0.3)'; ctx.fillRect(p.x+3, p.y+3, p.width, p.height);
+        ctx.fillStyle='#403e3e'; ctx.fillRect(p.x,p.y,p.width,p.height);
+        ctx.fillStyle='#696868'; ctx.fillRect(p.x,p.y,p.width,5);
+        ctx.strokeStyle='#000'; ctx.lineWidth=2; ctx.strokeRect(p.x,p.y,p.width,p.height);
+    });
+}
+
+function drawBackground() {
+    if (backgroundImage.complete) {
+        ctx.drawImage(backgroundImage, 0, 0, canvas.width, canvas.height);
+    }
+}
+
+// particles
+function updateParticles() {
+    for (let i=particles.length-1;i>=0;i--) {
+        particles[i].update();
+        if (particles[i].life<=0) particles.splice(i,1);
+    }
+}
+function drawParticles() {
+    particles.forEach(p=> p.draw());
+}
+
+// screen shake
+let screenShake= 0;
+function applyScreenShake() {
+    if (screenShake>0) {
+        const shakeX=(Math.random()-0.5)*screenShake;
+        const shakeY=(Math.random()-0.5)*screenShake;
+        ctx.translate(shakeX, shakeY);
+        screenShake*=0.9;
+        if (screenShake<0.1) screenShake=0;
+    }
+}
+
+// combo texts
+const comboTexts= [];
+class ComboText {
+    constructor(x,y,combo,player) {
+        this.x=x; this.y=y; this.combo=combo;
+        this.life=60; this.vy=-2;
+        this.color= player===player1? '#4169E1':'#DC143C';
+    }
+    update() { this.y+= this.vy; this.vy+=0.1; this.life--; }
+    draw() {
+        if (this.life<=0) return;
+        ctx.save(); ctx.globalAlpha= this.life/60;
+        ctx.fillStyle= this.color; ctx.font='bold 24px Arial'; ctx.textAlign='center';
+        ctx.fillText(`${this.combo} HIT COMBO!`, this.x,this.y);
+        ctx.strokeStyle='white'; ctx.lineWidth=2; ctx.strokeText(`${this.combo} HIT COMBO!`, this.x,this.y);
+        ctx.restore();
+    }
+}
+let lastCombo1=0, lastCombo2=0;
+function checkComboDisplay() {
+    if (player1.combo> lastCombo1 && player1.combo>=3) {
+        comboTexts.push(new ComboText(player1.x+ player1.width/2, player1.y-30, player1.combo, player1));
+    }
+    if (player2.combo> lastCombo2 && player2.combo>=3) {
+        comboTexts.push(new ComboText(player2.x+ player2.width/2, player2.y-30, player2.combo, player2));
+    }
+    lastCombo1= player1.combo; lastCombo2= player2.combo;
+    if (comboTexts.length>20) comboTexts.splice(0, comboTexts.length-20);
+}
+function updateComboTexts() {
+    for (let i= comboTexts.length-1;i>=0;i--) {
+        comboTexts[i].update();
+        if (comboTexts[i].life<=0) comboTexts.splice(i,1);
+    }
+}
+function drawComboTexts() {
+    comboTexts.forEach(t=> t.draw());
+}
+function drawGameOver() {
+    if (player1.health<=0 || player2.health<=0) {
+        ctx.fillStyle='rgba(0,0,0,0.8)';
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle='white'; ctx.font='bold 48px Arial'; ctx.textAlign='center';
+        const winner= player1.health<=0? 'SPELER 2':'SPELER 1';
+        const winnerColor= player1.health<=0? 'rgba(220,20,60,0.8)':'rgba(65,105,225,0.8)';
+        ctx.fillText(`${winner} WINT!`, canvas.width/2,canvas.height/2-50);
+        ctx.fillStyle= winnerColor; ctx.font='bold 72px Arial';
+        ctx.fillText('K.O.!', canvas.width/2,canvas.height/2+20);
+        ctx.fillStyle='white'; ctx.font='24px Arial';
+        ctx.fillText('Herlaad de pagina om opnieuw te spelen', canvas.width/2,canvas.height/2+80);
+        if (Math.random()<0.3) {
+            for (let i=0;i<3;i++) {
+                particles.push(new Particle(
+                    Math.random()*canvas.width, -10,
+                    (Math.random()-0.5)*4, Math.random()*3+2,
+                    winnerColor, 60
+                ));
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+// main loop
+let lastTime= performance.now();
+function gameLoop(currentTime) {
+    const deltaTime= (currentTime - lastTime)/16.67;
+    lastTime= currentTime;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.save();
+    applyScreenShake();
+    drawBackground();
+    drawPlatforms();
+    updateParticles();
+    drawParticles();
+    if (!drawGameOver()) {
+        player1.update();
+        player2.update();
+        checkComboDisplay();
+        updateComboTexts();
+    }
+    player1.draw();
+    player2.draw();
+    drawComboTexts();
+    ctx.restore();
+    updateUI();
+    clearPressedKeys();
+    requestAnimationFrame(gameLoop);
+}
+console.log('🥊 ADVANCED PLATFORM FIGHTER LOADED!');
+console.log('💥 Features: Sword attacks, kicks, grabs, specials, blocking, wall jumps, air combos, SOLID FLOOR-LIKE PLAYER COLLISIONS WITH FIXED JUMPING!');
+requestAnimationFrame(gameLoop);
+window.addEventListener('unload', cleanup);
+</script>
+</body>
+</html>
